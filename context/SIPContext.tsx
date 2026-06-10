@@ -73,6 +73,7 @@ export function SIPProvider({ children }: { children: React.ReactNode }) {
     stunServers: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'],
   })
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const registrationPromiseRef = useRef<{ resolve?: () => void; reject?: (error: Error) => void } | null>(null)
 
   // Initialize JsSIP
   useEffect(() => {
@@ -163,6 +164,9 @@ export function SIPProvider({ children }: { children: React.ReactNode }) {
         console.log('[v0] SIP registered')
         setIsRegistered(true)
         setIsRegistering(false)
+        if (registrationPromiseRef.current?.resolve) {
+          registrationPromiseRef.current.resolve()
+        }
       })
 
       sipUA.on('unregistered', () => {
@@ -172,8 +176,12 @@ export function SIPProvider({ children }: { children: React.ReactNode }) {
 
       sipUA.on('registrationFailed', (ev: any) => {
         console.log('[v0] Registration failed:', ev.cause)
-        setRegistrationError(ev.cause || 'Registration failed')
+        const errorMsg = ev.cause || 'Registration failed'
+        setRegistrationError(errorMsg)
         setIsRegistering(false)
+        if (registrationPromiseRef.current?.reject) {
+          registrationPromiseRef.current.reject(new Error(errorMsg))
+        }
       })
 
       sipUA.on('newRTCSession', (ev: any) => {
@@ -250,13 +258,27 @@ export function SIPProvider({ children }: { children: React.ReactNode }) {
 
       sipUA.start()
 
-      // Wait for connection
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      // Wait for registration with timeout
+      await new Promise<void>((resolve, reject) => {
+        registrationPromiseRef.current = { resolve, reject }
+        const timeout = setTimeout(() => {
+          registrationPromiseRef.current = null
+          reject(new Error('Registration timeout - could not reach SIP server. Check your server URI and network connection.'))
+        }, 10000)
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
       console.error('[v0] Registration error:', message)
       setRegistrationError(message)
       setIsRegistering(false)
+      if (sipUA) {
+        try {
+          sipUA.stop()
+          sipUA = null
+        } catch (e) {
+          console.error('[v0] Error stopping UA:', e)
+        }
+      }
     }
   }, [advancedSettings.stunServers])
 
